@@ -1,0 +1,596 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <limits.h>
+#include <string.h>
+
+// Structure definitions
+typedef struct {
+    int first;
+    int second;
+} Pair;
+
+typedef struct {
+    int process_id;
+    int start_time;
+    int end_time;
+} GanttEntry;
+
+// Dynamic arrays for process data
+typedef struct {
+    int *arrival_time;
+    int *burst_time;
+    int *burst_time_copy;
+    int capacity;
+    int size;
+} ProcessData;
+
+// Function to initialize process data structure
+ProcessData* init_process_data(int initial_capacity) {
+    ProcessData *data = (ProcessData*)malloc(sizeof(ProcessData));
+    if (!data) {
+        printf("❌ Memory allocation failed for ProcessData!\n");
+        exit(1);
+    }
+    
+    data->arrival_time = (int*)malloc(initial_capacity * sizeof(int));
+    data->burst_time = (int*)malloc(initial_capacity * sizeof(int));
+    data->burst_time_copy = (int*)malloc(initial_capacity * sizeof(int));
+    
+    if (!data->arrival_time || !data->burst_time || !data->burst_time_copy) {
+        printf("❌ Memory allocation failed for process arrays!\n");
+        exit(1);
+    }
+    
+    data->capacity = initial_capacity;
+    data->size = 0;
+    printf("✅ ProcessData initialized with capacity: %d\n", initial_capacity);
+    return data;
+}
+
+// Function to resize arrays when needed (doubles capacity)
+void resize_process_data(ProcessData *data) {
+    int old_capacity = data->capacity;
+    data->capacity *= 2;
+    
+    data->arrival_time = (int*)realloc(data->arrival_time, data->capacity * sizeof(int));
+    data->burst_time = (int*)realloc(data->burst_time, data->capacity * sizeof(int));
+    data->burst_time_copy = (int*)realloc(data->burst_time_copy, data->capacity * sizeof(int));
+    
+    if (!data->arrival_time || !data->burst_time || !data->burst_time_copy) {
+        printf("❌ Memory reallocation failed!\n");
+        exit(1);
+    }
+    
+    printf("📈 Array capacity expanded: %d → %d\n", old_capacity, data->capacity);
+}
+
+// Function to add a process with automatic resizing
+void add_process(ProcessData *data, int arrival, int burst) {
+    if (data->size >= data->capacity) {
+        resize_process_data(data);
+    }
+    
+    data->arrival_time[data->size] = arrival;
+    data->burst_time[data->size] = burst;
+    data->burst_time_copy[data->size] = burst;
+    data->size++;
+    
+    printf("➕ Process %d added (A:%d, B:%d)\n", data->size - 1, arrival, burst);
+}
+
+// Function to free process data memory
+void free_process_data(ProcessData *data) {
+    if (data) {
+        free(data->arrival_time);
+        free(data->burst_time);
+        free(data->burst_time_copy);
+        free(data);
+        printf("🧹 ProcessData memory freed\n");
+    }
+}
+
+// Dynamic Gantt chart structure
+typedef struct {
+    GanttEntry *entries;
+    int capacity;
+    int size;
+} GanttChart;
+
+// Initialize Gantt chart with dynamic allocation
+GanttChart* init_gantt_chart(int initial_capacity) {
+    GanttChart *chart = (GanttChart*)malloc(sizeof(GanttChart));
+    if (!chart) {
+        printf("❌ Memory allocation failed for GanttChart!\n");
+        exit(1);
+    }
+    
+    chart->entries = (GanttEntry*)malloc(initial_capacity * sizeof(GanttEntry));
+    if (!chart->entries) {
+        printf("❌ Memory allocation failed for Gantt entries!\n");
+        exit(1);
+    }
+    
+    chart->capacity = initial_capacity;
+    chart->size = 0;
+    return chart;
+}
+
+// Resize Gantt chart when capacity exceeded
+void resize_gantt_chart(GanttChart *chart) {
+    int old_capacity = chart->capacity;
+    chart->capacity *= 2;
+    chart->entries = (GanttEntry*)realloc(chart->entries, chart->capacity * sizeof(GanttEntry));
+    
+    if (!chart->entries) {
+        printf("❌ Memory reallocation failed for Gantt chart!\n");
+        exit(1);
+    }
+    
+    printf("📊 Gantt chart capacity expanded: %d → %d\n", old_capacity, chart->capacity);
+}
+
+// Add entry to Gantt chart with automatic resizing
+void add_gantt_entry(GanttChart *chart, int process_id, int start_time, int end_time) {
+    if (chart->size >= chart->capacity) {
+        resize_gantt_chart(chart);
+    }
+    
+    chart->entries[chart->size].process_id = process_id;
+    chart->entries[chart->size].start_time = start_time;
+    chart->entries[chart->size].end_time = end_time;
+    chart->size++;
+}
+
+// Free Gantt chart memory
+void free_gantt_chart(GanttChart *chart) {
+    if (chart) {
+        free(chart->entries);
+        free(chart);
+    }
+}
+
+// Function to print gantt chart with enhanced formatting
+void print_gantt_chart(GanttChart *chart, const char* title) {
+    printf("%s: ", title);
+    if (chart->size == 0) {
+        printf("Empty\n");
+        return;
+    }
+    
+    for (int i = 0; i < chart->size; i++) {
+        printf("P%d(%d-%d) ", chart->entries[i].process_id, 
+               chart->entries[i].start_time, chart->entries[i].end_time);
+    }
+    printf("\n");
+}
+
+// Function to compress gantt chart (merge consecutive entries of same process)
+GanttChart* compress_gantt_chart(GanttChart *original, ProcessData *data) {
+    if (original->size == 0) return init_gantt_chart(1);
+    
+    GanttChart *compressed = init_gantt_chart(data->size);
+    int *processed = (int*)calloc(data->size, sizeof(int));
+    
+    if (!processed) {
+        printf("❌ Memory allocation failed for processed array!\n");
+        exit(1);
+    }
+    
+    for (int i = 0; i < original->size; i++) {
+        int proc_id = original->entries[i].process_id;
+        
+        if (processed[proc_id] == 0) {
+            int start_time = original->entries[i].start_time;
+            int end_time = original->entries[i].end_time;
+            processed[proc_id] = 1;
+            
+            // Find last occurrence of this process
+            for (int j = original->size - 1; j >= 0; j--) {
+                if (original->entries[j].process_id == proc_id) {
+                    end_time = original->entries[j].end_time;
+                    break;
+                }
+            }
+            
+            add_gantt_entry(compressed, proc_id, start_time, end_time);
+        }
+    }
+    
+    free(processed);
+    return compressed;
+}
+
+// Function to calculate average turnaround and waiting times
+Pair calculate_times(GanttChart *chart, ProcessData *data) {
+    if (chart->size == 0 || data->size == 0) {
+        Pair result = {0, 0};
+        return result;
+    }
+    
+    int total_turnaround = 0, total_burst = 0;
+    
+    for (int i = 0; i < chart->size; i++) {
+        int proc_id = chart->entries[i].process_id;
+        total_turnaround += chart->entries[i].end_time - data->arrival_time[proc_id];
+    }
+    
+    for (int i = 0; i < data->size; i++) {
+        total_burst += data->burst_time[i];
+    }
+    
+    int avg_turnaround = total_turnaround / data->size;
+    int avg_waiting = (total_turnaround - total_burst) / data->size;
+    
+    Pair result = {avg_turnaround, avg_waiting};
+    return result;
+}
+
+// Create sorted indices array for arrival times with dynamic allocation
+int* create_sorted_indices(ProcessData *data) {
+    int *indices = (int*)malloc(data->size * sizeof(int));
+    if (!indices) {
+        printf("❌ Memory allocation failed for indices!\n");
+        exit(1);
+    }
+    
+    // Initialize indices
+    for (int i = 0; i < data->size; i++) {
+        indices[i] = i;
+    }
+    
+    // Sort indices based on arrival times (bubble sort for simplicity)
+    for (int i = 0; i < data->size - 1; i++) {
+        for (int j = i + 1; j < data->size; j++) {
+            if (data->arrival_time[indices[i]] > data->arrival_time[indices[j]]) {
+                int temp = indices[i];
+                indices[i] = indices[j];
+                indices[j] = temp;
+            }
+        }
+    }
+    
+    return indices;
+}
+
+// Find process with shortest burst time that has arrived
+int find_shortest_job(ProcessData *data, int current_time, int *visited) {
+    int min_burst = INT_MAX;
+    int selected_process = -1;
+    
+    for (int i = 0; i < data->size; i++) {
+        if (!visited[i] && data->arrival_time[i] <= current_time) {
+            if (data->burst_time[i] < min_burst) {
+                min_burst = data->burst_time[i];
+                selected_process = i;
+            }
+        }
+    }
+    
+    if (selected_process != -1) {
+        visited[selected_process] = 1;
+    }
+    
+    return selected_process;
+}
+
+// Find process with shortest remaining time
+int find_shortest_remaining_time(ProcessData *data, int current_time, int *remaining_burst) {
+    int min_remaining = INT_MAX;
+    int selected_process = -1;
+    
+    for (int i = 0; i < data->size; i++) {
+        if (data->arrival_time[i] <= current_time && remaining_burst[i] > 0) {
+            if (remaining_burst[i] < min_remaining) {
+                min_remaining = remaining_burst[i];
+                selected_process = i;
+            }
+        }
+    }
+    
+    return selected_process;
+}
+
+// FCFS Algorithm with dynamic memory
+GanttChart* fcfs(ProcessData *data) {
+    printf("🔄 Running FCFS algorithm...\n");
+    GanttChart *chart = init_gantt_chart(data->size);
+    int *sorted_indices = create_sorted_indices(data);
+    int current_time = 0;
+    
+    for (int i = 0; i < data->size; i++) {
+        int proc_id = sorted_indices[i];
+        int arrival = data->arrival_time[proc_id];
+        
+        if (current_time < arrival) {
+            current_time = arrival;
+        }
+        
+        add_gantt_entry(chart, proc_id, current_time, current_time + data->burst_time[proc_id]);
+        current_time += data->burst_time[proc_id];
+    }
+    
+    free(sorted_indices);
+    printf("✅ FCFS completed with %d entries\n", chart->size);
+    return chart;
+}
+
+// SJF Algorithm with dynamic memory
+GanttChart* sjf(ProcessData *data) {
+    printf("🔄 Running SJF algorithm...\n");
+    GanttChart *chart = init_gantt_chart(data->size);
+    int *visited = (int*)calloc(data->size, sizeof(int));
+    
+    if (!visited) {
+        printf("❌ Memory allocation failed for visited array!\n");
+        exit(1);
+    }
+    
+    // Find minimum arrival time
+    int min_arrival = INT_MAX;
+    for (int i = 0; i < data->size; i++) {
+        if (data->arrival_time[i] < min_arrival) {
+            min_arrival = data->arrival_time[i];
+        }
+    }
+    
+    int current_time = min_arrival;
+    
+    for (int i = 0; i < data->size; i++) {
+        int proc_id = find_shortest_job(data, current_time, visited);
+        if (proc_id != -1) {
+            add_gantt_entry(chart, proc_id, current_time, current_time + data->burst_time[proc_id]);
+            current_time += data->burst_time[proc_id];
+        }
+    }
+    
+    free(visited);
+    printf("✅ SJF completed with %d entries\n", chart->size);
+    return chart;
+}
+
+// SRTF Algorithm with dynamic memory
+GanttChart* srtf(ProcessData *data, int total_time) {
+    printf("🔄 Running SRTF algorithm...\n");
+    GanttChart *chart = init_gantt_chart(total_time * 2); // Generous initial capacity
+    int *remaining_burst = (int*)malloc(data->size * sizeof(int));
+    
+    if (!remaining_burst) {
+        printf("❌ Memory allocation failed for remaining burst array!\n");
+        exit(1);
+    }
+    
+    // Initialize remaining burst times
+    for (int i = 0; i < data->size; i++) {
+        remaining_burst[i] = data->burst_time_copy[i];
+    }
+    
+    int current_time = 0;
+    
+    while (total_time > 0) {
+        int proc_id = find_shortest_remaining_time(data, current_time, remaining_burst);
+        
+        if (proc_id != -1) {
+            remaining_burst[proc_id]--;
+            add_gantt_entry(chart, proc_id, current_time, current_time + 1);
+            total_time--;
+        }
+        current_time++;
+    }
+    
+    free(remaining_burst);
+    printf("✅ SRTF completed with %d entries\n", chart->size);
+    return chart;
+}
+
+// Round Robin Algorithm with dynamic memory
+GanttChart* round_robin(ProcessData *data, int time_quantum, int total_time) {
+    printf("🔄 Running Round Robin algorithm (TQ=%d)...\n", time_quantum);
+    GanttChart *chart = init_gantt_chart(total_time); // Initial capacity
+    int *remaining_burst = (int*)malloc(data->size * sizeof(int));
+    int *sorted_indices = create_sorted_indices(data);
+    
+    if (!remaining_burst) {
+        printf("❌ Memory allocation failed for remaining burst array!\n");
+        exit(1);
+    }
+    
+    // Initialize remaining burst times
+    for (int i = 0; i < data->size; i++) {
+        remaining_burst[i] = data->burst_time_copy[i];
+    }
+    
+    int current_time = 0;
+    
+    while (total_time > 0) {
+        int progress_made = 0;
+        
+        for (int i = 0; i < data->size && total_time > 0; i++) {
+            int proc_id = sorted_indices[i];
+            int arrival = data->arrival_time[proc_id];
+            
+            if (current_time >= arrival && remaining_burst[proc_id] > 0) {
+                int exec_time;
+                if (remaining_burst[proc_id] > time_quantum) {
+                    exec_time = time_quantum;
+                    remaining_burst[proc_id] -= time_quantum;
+                } else {
+                    exec_time = remaining_burst[proc_id];
+                    remaining_burst[proc_id] = 0;
+                }
+                
+                add_gantt_entry(chart, proc_id, current_time, current_time + exec_time);
+                current_time += exec_time;
+                total_time -= exec_time;
+                progress_made = 1;
+            }
+        }
+        
+        // If no progress was made, advance time
+        if (!progress_made) {
+            current_time++;
+        }
+    }
+    
+    free(remaining_burst);
+    free(sorted_indices);
+    printf("✅ Round Robin completed with %d entries\n", chart->size);
+    return chart;
+}
+
+// Enhanced input function with better validation
+ProcessData* input_processes(int *total_time) {
+    ProcessData *data = init_process_data(2); // Start small
+    int add = 1;
+    int arrival, burst;
+    *total_time = 0;
+    
+    printf("\n🚀 CPU Scheduling Simulator with Dynamic Memory Allocation\n");
+    printf("=========================================================\n\n");
+    printf("Starting with initial capacity: %d processes\n\n", data->capacity);
+    
+    while (add == 1) {
+        printf("📝 Process %d:\n", data->size);
+        
+        do {
+            printf("   Enter arrival time (≥0): ");
+            scanf("%d", &arrival);
+            if (arrival < 0) printf("   ❌ Arrival time must be non-negative!\n");
+        } while (arrival < 0);
+        
+        do {
+            printf("   Enter burst time (>0): ");
+            scanf("%d", &burst);
+            if (burst <= 0) printf("   ❌ Burst time must be positive!\n");
+        } while (burst <= 0);
+        
+        add_process(data, arrival, burst);
+        *total_time += burst;
+        
+        printf("   Add another process? (1=Yes, 0=No): ");
+        scanf("%d", &add);
+        printf("\n");
+    }
+    
+    float efficiency = (float)data->size / data->capacity * 100;
+    printf("📊 Memory Statistics:\n");
+    printf("   Total processes: %d\n", data->size);
+    printf("   Final capacity: %d\n", data->capacity);
+    printf("   Memory efficiency: %.1f%%\n", efficiency);
+    printf("   Total CPU time: %d units\n\n", *total_time);
+    
+    return data;
+}
+
+// Enhanced results display
+void display_results(const char* algorithm, Pair times, GanttChart* detailed, GanttChart* compressed) {
+    printf("═══════════════════════════════════════\n");
+    printf("🎯 %s RESULTS\n", algorithm);
+    printf("═══════════════════════════════════════\n");
+    printf("📈 Average Turnaround Time: %d\n", times.first);
+    printf("⏰ Average Waiting Time: %d\n", times.second);
+    
+    if (detailed) {
+        print_gantt_chart(detailed, "Detailed Gantt");
+    }
+    if (compressed && compressed != detailed) {
+        print_gantt_chart(compressed, "Compressed Gantt");
+    }
+    printf("\n");
+}
+
+int main() {
+    printf("🎉 Advanced CPU Scheduler with Dynamic Memory Management\n");
+    printf("======================================================\n");
+    
+    // Input processes with dynamic allocation
+    int total_time = 0;
+    ProcessData *data = input_processes(&total_time);
+    int total_time_backup = total_time;
+    
+    // Dynamic arrays for results
+    Pair *results = (Pair*)malloc(4 * sizeof(Pair));
+    char **algorithm_names = (char**)malloc(4 * sizeof(char*));
+    
+    if (!results || !algorithm_names) {
+        printf("❌ Memory allocation failed for results!\n");
+        exit(1);
+    }
+    
+    // Initialize algorithm names
+    algorithm_names[0] = "FCFS";
+    algorithm_names[1] = "SJF"; 
+    algorithm_names[2] = "SRTF";
+    algorithm_names[3] = "Round Robin";
+    
+    // Run all algorithms
+    printf("🚀 Starting algorithm execution...\n\n");
+    
+    // FCFS
+    GanttChart *fcfs_chart = fcfs(data);
+    results[0] = calculate_times(fcfs_chart, data);
+    display_results("FIRST COME FIRST SERVE", results[0], fcfs_chart, NULL);
+    
+    // SJF  
+    GanttChart *sjf_chart = sjf(data);
+    results[1] = calculate_times(sjf_chart, data);
+    display_results("SHORTEST JOB FIRST", results[1], sjf_chart, NULL);
+    
+    // SRTF
+    total_time = total_time_backup; // Reset for SRTF
+    GanttChart *srtf_chart = srtf(data, total_time);
+    GanttChart *srtf_compressed = compress_gantt_chart(srtf_chart, data);
+    results[2] = calculate_times(srtf_compressed, data);
+    display_results("SHORTEST REMAINING TIME FIRST", results[2], srtf_chart, srtf_compressed);
+    
+    // Round Robin
+    total_time = total_time_backup; // Reset for RR
+    int time_quantum = 2;
+    GanttChart *rr_chart = round_robin(data, time_quantum, total_time);
+    GanttChart *rr_compressed = compress_gantt_chart(rr_chart, data);
+    results[3] = calculate_times(rr_compressed, data);
+    display_results("ROUND ROBIN", results[3], rr_chart, rr_compressed);
+    
+    // Find and announce winner
+    printf("🏆 PERFORMANCE COMPARISON\n");
+    printf("═════════════════════════\n");
+    
+    int best_index = 0;
+    int min_turnaround = results[0].first;
+    int min_waiting = results[0].second;
+    
+    for (int i = 0; i < 4; i++) {
+        printf("%-20s | TAT: %3d | WT: %3d\n", 
+               algorithm_names[i], results[i].first, results[i].second);
+        
+        if (results[i].first < min_turnaround || 
+           (results[i].first == min_turnaround && results[i].second < min_waiting)) {
+            best_index = i;
+            min_turnaround = results[i].first;
+            min_waiting = results[i].second;
+        }
+    }
+    
+    printf("═════════════════════════\n");
+    printf("🥇 WINNER: %s\n", algorithm_names[best_index]);
+    printf("   Best Turnaround Time: %d\n", min_turnaround);
+    printf("   Best Waiting Time: %d\n\n", min_waiting);
+    
+    // Comprehensive memory cleanup
+    printf("🧹 MEMORY CLEANUP\n");
+    printf("=================\n");
+    
+    free_process_data(data);
+    free_gantt_chart(fcfs_chart);
+    free_gantt_chart(sjf_chart); 
+    free_gantt_chart(srtf_chart);
+    free_gantt_chart(srtf_compressed);
+    free_gantt_chart(rr_chart);
+    free_gantt_chart(rr_compressed);
+    free(results);
+    free(algorithm_names);
+    
+    printf("✅ All dynamically allocated memory successfully freed!\n");
+    printf("🎉 Program completed successfully with no memory leaks!\n");
+    
+    return 0;
+}
